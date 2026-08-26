@@ -11,12 +11,14 @@ from app.services.lead_scorer import calculate_lead_score
 from app.services.opportunity_analyzer import analyze_opportunity
 from app.services.email_generator import generate_outreach_email
 from app.services.lead_discovery import discover_leads
+from app.services.contact_enricher import enrich_contact
+from app.services.gmail_service import create_gmail_draft
 
 
 app = FastAPI(
     title="Foreign Client Engine",
     description="Automated foreign client discovery and outreach system",
-    version="0.2.0"
+    version="0.4.0"
 )
 
 Base.metadata.create_all(bind=engine)
@@ -40,6 +42,7 @@ class DiscoveryInput(BaseModel):
     city: str
     country: str
     category: str
+
     limit: int = Field(
         default=10,
         ge=1,
@@ -139,6 +142,32 @@ def lead_to_dict(lead: Lead):
     }
 
 
+def build_lead_analysis(lead: Lead):
+
+    website_data = {
+        "status": lead.website_status,
+
+        "problems": json.loads(
+            lead.problems or "[]"
+        )
+    }
+
+    scoring = {
+        "lead_score": lead.lead_score,
+
+        "priority": lead.priority,
+
+        "recommended_service":
+            lead.recommended_service,
+
+        "reasons": json.loads(
+            lead.reasons or "[]"
+        )
+    }
+
+    return website_data, scoring
+
+
 # ============================================================
 # HOME
 # ============================================================
@@ -148,7 +177,7 @@ def home():
 
     return {
         "message": "Foreign Client Engine is running",
-        "version": "0.2.0",
+        "version": "0.4.0",
         "status": "online"
     }
 
@@ -255,6 +284,7 @@ def get_lead(
     ).first()
 
     if not lead:
+
         raise HTTPException(
             status_code=404,
             detail="Lead not found"
@@ -278,29 +308,15 @@ async def generate_lead_outreach(
     ).first()
 
     if not lead:
+
         raise HTTPException(
             status_code=404,
             detail="Lead not found"
         )
 
-    website_data = {
-        "status": lead.website_status,
-
-        "problems": json.loads(
-            lead.problems or "[]"
-        )
-    }
-
-    scoring = {
-        "lead_score": lead.lead_score,
-        "priority": lead.priority,
-
-        "recommended_service": lead.recommended_service,
-
-        "reasons": json.loads(
-            lead.reasons or "[]"
-        )
-    }
+    website_data, scoring = build_lead_analysis(
+        lead
+    )
 
     opportunity = analyze_opportunity(
         lead,
@@ -318,7 +334,131 @@ async def generate_lead_outreach(
         "business_name": lead.business_name,
 
         "opportunity_report": opportunity,
+
         "outreach_email": email
+    }
+
+
+# ============================================================
+# CONTACT ENRICHMENT
+# ============================================================
+
+@app.post("/api/leads/{lead_id}/enrich-contact")
+async def enrich_lead_contact(
+    lead_id: int,
+    db: Session = Depends(get_db)
+):
+
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id
+    ).first()
+
+    if not lead:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Lead not found"
+        )
+
+    if not lead.website:
+
+        return {
+            "lead_id": lead.id,
+            "business_name": lead.business_name,
+            "status": "NO_WEBSITE",
+
+            "message": (
+                "Contact enrichment requires an "
+                "official website."
+            )
+        }
+
+    contact_data = await enrich_contact(
+        lead.website
+    )
+
+    if contact_data.get("email"):
+        lead.email = contact_data["email"]
+
+    if contact_data.get("phone"):
+        lead.phone = contact_data["phone"]
+
+    db.commit()
+    db.refresh(lead)
+
+    return {
+        "lead_id": lead.id,
+        "business_name": lead.business_name,
+
+        "contact_enrichment": contact_data,
+
+        "saved_contact": {
+            "email": lead.email,
+            "phone": lead.phone
+        }
+    }
+
+
+# ============================================================
+# CREATE GMAIL DRAFT
+# ============================================================
+
+@app.post("/api/leads/{lead_id}/gmail-draft")
+async def create_lead_gmail_draft(
+    lead_id: int,
+    db: Session = Depends(get_db)
+):
+
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id
+    ).first()
+
+    if not lead:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Lead not found"
+        )
+
+    if not lead.email:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No email found for this lead. "
+                "Run contact enrichment first."
+            )
+        )
+
+    website_data, scoring = build_lead_analysis(
+        lead
+    )
+
+    opportunity = analyze_opportunity(
+        lead,
+        website_data,
+        scoring
+    )
+
+    outreach = generate_outreach_email(
+        lead,
+        opportunity
+    )
+
+    draft_result = create_gmail_draft(
+        recipient=lead.email,
+        subject=outreach["subject"],
+        body=outreach["body"]
+    )
+
+    return {
+        "lead_id": lead.id,
+
+        "business_name": lead.business_name,
+
+        "email": lead.email,
+
+        "gmail_draft": draft_result
     }
 
 
@@ -380,9 +520,7 @@ async def discover_business_leads(
             country=request.country,
             city=request.city,
             category=request.category,
-
             website=discovered.get("website"),
-
             rating=None,
             reviews=None
         )
@@ -393,7 +531,6 @@ async def discover_business_leads(
                 await process_lead(
                     lead_input,
                     db,
-
                     phone=discovered.get("phone"),
                     email=discovered.get("email"),
                     source=discovered.get("source")
@@ -402,16 +539,25 @@ async def discover_business_leads(
 
             results.append({
                 "business_name": new_lead.business_name,
+
                 "status": "SAVED",
 
                 "lead_id": new_lead.id,
 
-                "website_status": new_lead.website_status,
-                "lead_score": new_lead.lead_score,
-                "priority": new_lead.priority,
+                "website_status":
+                    new_lead.website_status,
 
-                "phone_found": bool(new_lead.phone),
-                "email_found": bool(new_lead.email)
+                "lead_score":
+                    new_lead.lead_score,
+
+                "priority":
+                    new_lead.priority,
+
+                "phone_found":
+                    bool(new_lead.phone),
+
+                "email_found":
+                    bool(new_lead.email)
             })
 
         except Exception as error:
@@ -442,9 +588,13 @@ async def discover_business_leads(
         "country": request.country,
         "category": request.category,
 
-        "total_discovered": len(discovered_leads),
+        "total_discovered":
+            len(discovered_leads),
+
         "saved": saved,
+
         "duplicates": duplicates,
+
         "failed": failed,
 
         "results": results
