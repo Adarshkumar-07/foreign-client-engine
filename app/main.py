@@ -23,12 +23,12 @@ from app.services.gmail_service import create_gmail_draft
 app = FastAPI(
     title="Foreign Client Engine",
     description="Automated foreign client discovery and outreach system",
-    version="0.4.0"
+    version="0.5.0"
 )
 
 
 # ============================================================
-# CORS - REACT + VITE FRONTEND SUPPORT
+# CORS - REACT + VITE
 # ============================================================
 
 app.add_middleware(
@@ -65,7 +65,6 @@ class DiscoveryInput(BaseModel):
     city: str
     country: str
     category: str
-
     limit: int = Field(
         default=10,
         ge=1,
@@ -153,7 +152,8 @@ def lead_to_dict(lead: Lead):
         "lead_score": lead.lead_score,
         "priority": lead.priority,
 
-        "recommended_service": lead.recommended_service,
+        "recommended_service":
+            lead.recommended_service,
 
         "reasons": json.loads(
             lead.reasons or "[]"
@@ -200,7 +200,7 @@ def home():
 
     return {
         "message": "Foreign Client Engine is running",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "status": "online"
     }
 
@@ -229,9 +229,11 @@ async def analyze_lead(
             "lead": lead_to_dict(existing_lead)
         }
 
-    new_lead, website_data, scoring = await process_lead(
-        lead,
-        db
+    new_lead, website_data, scoring = (
+        await process_lead(
+            lead,
+            db
+        )
     )
 
     return {
@@ -476,11 +478,8 @@ async def create_lead_gmail_draft(
 
     return {
         "lead_id": lead.id,
-
         "business_name": lead.business_name,
-
         "email": lead.email,
-
         "gmail_draft": draft_result
     }
 
@@ -561,11 +560,13 @@ async def discover_business_leads(
             )
 
             results.append({
-                "business_name": new_lead.business_name,
+                "business_name":
+                    new_lead.business_name,
 
                 "status": "SAVED",
 
-                "lead_id": new_lead.id,
+                "lead_id":
+                    new_lead.id,
 
                 "website_status":
                     new_lead.website_status,
@@ -586,9 +587,13 @@ async def discover_business_leads(
         except Exception as error:
 
             results.append({
-                "business_name": business_name,
+                "business_name":
+                    business_name,
+
                 "status": "FAILED",
-                "error": str(error)
+
+                "error":
+                    str(error)
             })
 
     saved = len([
@@ -614,11 +619,15 @@ async def discover_business_leads(
         "total_discovered":
             len(discovered_leads),
 
-        "saved": saved,
+        "saved":
+            saved,
 
-        "duplicates": duplicates,
+        "duplicates":
+            duplicates,
 
-        "failed": failed,
+        "failed":
+            failed,
 
-        "results": results
+        "results":
+            results
     }
