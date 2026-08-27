@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 import json
@@ -15,11 +16,33 @@ from app.services.contact_enricher import enrich_contact
 from app.services.gmail_service import create_gmail_draft
 
 
+# ============================================================
+# FASTAPI APPLICATION
+# ============================================================
+
 app = FastAPI(
     title="Foreign Client Engine",
     description="Automated foreign client discovery and outreach system",
     version="0.4.0"
 )
+
+
+# ============================================================
+# CORS - REACT + VITE FRONTEND SUPPORT
+# ============================================================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ============================================================
+# DATABASE
+# ============================================================
 
 Base.metadata.create_all(bind=engine)
 
