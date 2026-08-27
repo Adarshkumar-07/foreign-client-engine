@@ -1,30 +1,28 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
 import "./App.css";
 
-const API_URL = "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function App() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [selectedLead, setSelectedLead] = useState(null);
+  const [message, setMessage] = useState("");
 
-  const [city, setCity] = useState("Austin");
-  const [country, setCountry] = useState("USA");
-  const [category, setCategory] = useState("dentist");
+  const [formData, setFormData] = useState({
+    city: "Austin",
+    country: "USA",
+    category: "dentist",
+    limit: 10,
+  });
 
   const loadLeads = async () => {
     try {
-      setLoading(true);
-
-      const response = await axios.get(`${API_URL}/api/leads`);
-
-      setLeads(response.data);
+      const response = await fetch(`${API_URL}/api/leads`);
+      const data = await response.json();
+      setLeads(data);
     } catch (error) {
-      console.error("Error loading leads:", error);
-      alert("Could not connect to the backend.");
-    } finally {
-      setLoading(false);
+      setMessage("Unable to connect to the backend.");
+      console.error(error);
     }
   };
 
@@ -32,266 +30,367 @@ function App() {
     loadLeads();
   }, []);
 
-  const discoverLeads = async () => {
-    try {
-      setLoading(true);
+  const handleChange = (event) => {
+    setFormData({
+      ...formData,
+      [event.target.name]: event.target.value,
+    });
+  };
 
-      const response = await axios.post(
+  const discoverLeads = async (event) => {
+    event.preventDefault();
+
+    setLoading(true);
+    setMessage("Searching for businesses...");
+
+    try {
+      const response = await fetch(
         `${API_URL}/api/leads/discover`,
         {
-          city,
-          country,
-          category,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            city: formData.city,
+            country: formData.country,
+            category: formData.category,
+            limit: Number(formData.limit),
+          }),
         }
       );
 
-      alert(
-        `Discovery complete!\nFound: ${response.data.total_discovered}\nSaved: ${response.data.saved}`
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Lead discovery failed");
+      }
+
+      setMessage(
+        `Discovery complete: ${data.saved} saved, ${data.duplicates} duplicates.`
       );
 
-      loadLeads();
+      await loadLeads();
     } catch (error) {
-      console.error(error);
-      alert("Lead discovery failed.");
+      setMessage(`Error: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const enrichLead = async (leadId) => {
+  const generateOutreach = async (leadId) => {
     try {
-      setLoading(true);
+      setMessage("Generating outreach email...");
 
-      const response = await axios.post(
-        `${API_URL}/api/leads/${leadId}/enrich-contact`
+      const response = await fetch(
+        `${API_URL}/api/leads/${leadId}/outreach`
       );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Unable to generate outreach");
+      }
+
+      const email = data.outreach_email;
 
       alert(
-        `Contact enrichment complete!\nEmail: ${
-          response.data.contact_enrichment?.email || "Not found"
-        }\nPhone: ${
-          response.data.contact_enrichment?.phone || "Not found"
-        }`
+        `Subject:\n${email.subject}\n\nMessage:\n${email.body}`
       );
 
-      loadLeads();
+      setMessage("Outreach email generated.");
     } catch (error) {
-      console.error(error);
-      alert("Contact enrichment failed.");
-    } finally {
-      setLoading(false);
+      setMessage(`Error: ${error.message}`);
     }
   };
 
-  const generateEmail = async (leadId) => {
+  const enrichContact = async (leadId) => {
     try {
-      setLoading(true);
+      setMessage("Searching for contact information...");
 
-      const response = await axios.post(
-        `${API_URL}/api/leads/${leadId}/gmail-draft`
+      const response = await fetch(
+        `${API_URL}/api/leads/${leadId}/enrich-contact`,
+        {
+          method: "POST",
+        }
       );
 
-      setSelectedLead(response.data);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Contact enrichment failed");
+      }
+
+      setMessage("Contact enrichment completed.");
+
+      await loadLeads();
     } catch (error) {
-      console.error(error);
-      alert("Email generation failed.");
-    } finally {
-      setLoading(false);
+      setMessage(`Error: ${error.message}`);
     }
   };
+
+  const createGmailDraft = async (leadId) => {
+    try {
+      setMessage("Creating Gmail draft...");
+
+      const response = await fetch(
+        `${API_URL}/api/leads/${leadId}/gmail-draft`,
+        {
+          method: "POST",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Unable to create Gmail draft");
+      }
+
+      setMessage("Gmail draft created successfully.");
+    } catch (error) {
+      setMessage(`Error: ${error.message}`);
+    }
+  };
+
+  const totalLeads = leads.length;
 
   const highPriorityLeads = leads.filter(
-    (lead) => lead.priority === "HIGH"
-  );
+    (lead) =>
+      lead.priority === "HIGH" ||
+      lead.priority === "VERY_HIGH"
+  ).length;
 
-  const mediumPriorityLeads = leads.filter(
-    (lead) => lead.priority === "MEDIUM"
-  );
-
-  const leadsWithContact = leads.filter(
-    (lead) => lead.email || lead.phone
-  );
+  const leadsWithEmail = leads.filter(
+    (lead) => lead.email
+  ).length;
 
   return (
     <div className="app">
-      <header>
+      <header className="header">
         <div>
           <h1>Foreign Client Engine</h1>
-          <p>Find, analyze and contact potential international clients.</p>
+
+          <p>
+            Discover businesses, analyze opportunities, and automate outreach.
+          </p>
         </div>
 
-        <button onClick={loadLeads}>
+        <button
+          className="secondary-btn"
+          onClick={loadLeads}
+        >
           Refresh Leads
         </button>
       </header>
 
-      <section className="stats">
-        <div className="stat-card">
-          <h3>Total Leads</h3>
-          <span>{leads.length}</span>
-        </div>
+      <main>
+        <section className="search-card">
+          <h2>Discover New Clients</h2>
 
-        <div className="stat-card">
-          <h3>High Priority</h3>
-          <span>{highPriorityLeads.length}</span>
-        </div>
+          <form onSubmit={discoverLeads}>
+            <div className="form-grid">
+              <div className="input-group">
+                <label>City</label>
 
-        <div className="stat-card">
-          <h3>Medium Priority</h3>
-          <span>{mediumPriorityLeads.length}</span>
-        </div>
-
-        <div className="stat-card">
-          <h3>Contacts Found</h3>
-          <span>{leadsWithContact.length}</span>
-        </div>
-      </section>
-
-      <section className="discovery">
-        <h2>Discover New Clients</h2>
-
-        <div className="form-row">
-          <input
-            type="text"
-            value={city}
-            placeholder="City"
-            onChange={(e) => setCity(e.target.value)}
-          />
-
-          <input
-            type="text"
-            value={country}
-            placeholder="Country"
-            onChange={(e) => setCountry(e.target.value)}
-          />
-
-          <input
-            type="text"
-            value={category}
-            placeholder="Business Category"
-            onChange={(e) => setCategory(e.target.value)}
-          />
-
-          <button
-            onClick={discoverLeads}
-            disabled={loading}
-          >
-            Discover Leads
-          </button>
-        </div>
-      </section>
-
-      <section className="leads-section">
-        <div className="section-title">
-          <h2>Business Leads</h2>
-
-          {loading && <span>Loading...</span>}
-        </div>
-
-        <div className="lead-grid">
-          {leads.map((lead) => (
-            <div className="lead-card" key={lead.id}>
-              <div className="lead-header">
-                <h3>{lead.business_name}</h3>
-
-                <span
-                  className={`priority ${lead.priority?.toLowerCase()}`}
-                >
-                  {lead.priority}
-                </span>
+                <input
+                  type="text"
+                  name="city"
+                  value={formData.city}
+                  onChange={handleChange}
+                  placeholder="Austin"
+                  required
+                />
               </div>
 
-              <p className="location">
-                📍 {lead.city}, {lead.country}
-              </p>
+              <div className="input-group">
+                <label>Country</label>
 
-              <div className="lead-info">
-                <p>
-                  <strong>Category:</strong> {lead.category}
-                </p>
-
-                <p>
-                  <strong>Website:</strong>{" "}
-                  {lead.website_status}
-                </p>
-
-                <p>
-                  <strong>Score:</strong>{" "}
-                  {lead.lead_score}
-                </p>
-
-                <p>
-                  <strong>Service:</strong>{" "}
-                  {lead.recommended_service}
-                </p>
-
-                <p>
-                  <strong>Email:</strong>{" "}
-                  {lead.email || "Not found"}
-                </p>
-
-                <p>
-                  <strong>Phone:</strong>{" "}
-                  {lead.phone || "Not found"}
-                </p>
+                <input
+                  type="text"
+                  name="country"
+                  value={formData.country}
+                  onChange={handleChange}
+                  placeholder="USA"
+                  required
+                />
               </div>
 
-              <div className="actions">
-                <button
-                  onClick={() => enrichLead(lead.id)}
-                  disabled={loading}
-                >
-                  Find Contact
-                </button>
+              <div className="input-group">
+                <label>Business Category</label>
 
-                <button
-                  onClick={() => generateEmail(lead.id)}
-                  disabled={loading}
-                >
-                  Generate Email
-                </button>
+                <input
+                  type="text"
+                  name="category"
+                  value={formData.category}
+                  onChange={handleChange}
+                  placeholder="Dentist"
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label>Number of Leads</label>
+
+                <input
+                  type="number"
+                  name="limit"
+                  min="1"
+                  max="50"
+                  value={formData.limit}
+                  onChange={handleChange}
+                  required
+                />
               </div>
             </div>
-          ))}
-        </div>
 
-        {!loading && leads.length === 0 && (
-          <div className="empty">
-            No leads found. Discover your first businesses.
+            <button
+              type="submit"
+              className="primary-btn"
+              disabled={loading}
+            >
+              {loading
+                ? "Discovering..."
+                : "Discover Businesses"}
+            </button>
+          </form>
+        </section>
+
+        {message && (
+          <div className="message-box">
+            {message}
           </div>
         )}
-      </section>
 
-      {selectedLead && (
-        <div className="modal-overlay">
-          <div className="email-modal">
-            <button
-              className="close"
-              onClick={() => setSelectedLead(null)}
-            >
-              ×
-            </button>
-
-            <h2>Email Draft</h2>
-
-            <h3>
-              {selectedLead.business_name}
-            </h3>
-
-            {selectedLead.subject && (
-              <p>
-                <strong>Subject:</strong>{" "}
-                {selectedLead.subject}
-              </p>
-            )}
-
-            <pre>
-              {selectedLead.body ||
-                JSON.stringify(selectedLead, null, 2)}
-            </pre>
+        <section className="stats">
+          <div className="stat-card">
+            <span>Total Leads</span>
+            <strong>{totalLeads}</strong>
           </div>
-        </div>
-      )}
+
+          <div className="stat-card">
+            <span>High Priority</span>
+            <strong>{highPriorityLeads}</strong>
+          </div>
+
+          <div className="stat-card">
+            <span>Emails Found</span>
+            <strong>{leadsWithEmail}</strong>
+          </div>
+        </section>
+
+        <section className="leads-section">
+          <div className="section-title">
+            <div>
+              <h2>Client Leads</h2>
+
+              <span>
+                Manage discovered business opportunities.
+              </span>
+            </div>
+
+            <span>{leads.length} leads</span>
+          </div>
+
+          {leads.length === 0 ? (
+            <div className="empty-state">
+              <h3>No leads found yet</h3>
+
+              <p>
+                Use the discovery form above to find
+                potential foreign clients.
+              </p>
+            </div>
+          ) : (
+            <div className="leads-grid">
+              {leads.map((lead) => (
+                <div
+                  className="lead-card"
+                  key={lead.id}
+                >
+                  <div className="lead-top">
+                    <h3>{lead.business_name}</h3>
+
+                    <span
+                      className={`priority ${lead.priority
+                        ?.toLowerCase()
+                        .replace("_", "-")}`}
+                    >
+                      {lead.priority}
+                    </span>
+                  </div>
+
+                  <div className="lead-info">
+                    <p>
+                      <strong>Location:</strong>{" "}
+                      {lead.city}, {lead.country}
+                    </p>
+
+                    <p>
+                      <strong>Category:</strong>{" "}
+                      {lead.category}
+                    </p>
+
+                    <p>
+                      <strong>Website:</strong>{" "}
+                      {lead.website_status}
+                    </p>
+
+                    <p>
+                      <strong>Score:</strong>{" "}
+                      {lead.lead_score}
+                    </p>
+
+                    <p>
+                      <strong>Recommended:</strong>{" "}
+                      {lead.recommended_service}
+                    </p>
+
+                    <p>
+                      <strong>Email:</strong>{" "}
+                      {lead.email || "Not found"}
+                    </p>
+
+                    <p>
+                      <strong>Phone:</strong>{" "}
+                      {lead.phone || "Not found"}
+                    </p>
+                  </div>
+
+                  <div className="actions">
+                    <button
+                      className="action-btn"
+                      onClick={() =>
+                        generateOutreach(lead.id)
+                      }
+                    >
+                      Generate Email
+                    </button>
+
+                    <button
+                      className="secondary-btn"
+                      onClick={() =>
+                        enrichContact(lead.id)
+                      }
+                    >
+                      Find Contact
+                    </button>
+
+                    <button
+                      className="gmail-btn"
+                      disabled={!lead.email}
+                      onClick={() =>
+                        createGmailDraft(lead.id)
+                      }
+                    >
+                      Gmail Draft
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   );
 }
