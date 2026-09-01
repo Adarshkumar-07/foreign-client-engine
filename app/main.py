@@ -4,6 +4,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from io import BytesIO
+from urllib.parse import quote
 import json
 import os
 
@@ -19,13 +20,7 @@ from app.services.opportunity_analyzer import analyze_opportunity
 from app.services.email_generator import generate_outreach_email
 from app.services.lead_discovery import discover_leads
 from app.services.contact_enricher import enrich_contact
-from app.services.gmail_service import (
-    create_gmail_draft,
-    send_gmail_message,
-    get_authorization_url,
-    complete_authorization,
-    gmail_is_connected,
-)
+from app.services.gmail_service import create_gmail_draft, send_gmail_message, get_authorization_url, complete_authorization, gmail_is_connected
 
 
 app = FastAPI(
@@ -39,7 +34,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 Base.metadata.create_all(bind=engine)
@@ -88,11 +83,7 @@ def add_activity(db: Session, lead: Lead | None, action: str, status: str | None
 
 async def process_lead(lead_input: LeadInput, db: Session, phone: str | None = None, email: str | None = None, source: str | None = None):
     website_data = await check_website(lead_input.website)
-    scoring = calculate_lead_score(
-        website_data=website_data,
-        rating=lead_input.rating,
-        reviews=lead_input.reviews,
-    )
+    scoring = calculate_lead_score(website_data=website_data, rating=lead_input.rating, reviews=lead_input.reviews)
 
     new_lead = Lead(
         business_name=lead_input.business_name,
@@ -142,10 +133,7 @@ def lead_to_dict(lead: Lead):
 
 
 def build_lead_analysis(lead: Lead):
-    website_data = {
-        "status": lead.website_status,
-        "problems": json.loads(lead.problems or "[]"),
-    }
+    website_data = {"status": lead.website_status, "problems": json.loads(lead.problems or "[]")}
     scoring = {
         "lead_score": lead.lead_score,
         "priority": lead.priority,
@@ -173,27 +161,16 @@ def health():
 
 @app.post("/api/leads/analyze")
 async def analyze_lead(lead: LeadInput, db: Session = Depends(get_db)):
-    existing_lead = db.query(Lead).filter(
-        Lead.business_name == lead.business_name,
-        Lead.city == lead.city,
-        Lead.country == lead.country,
-    ).first()
-
+    existing_lead = db.query(Lead).filter(Lead.business_name == lead.business_name, Lead.city == lead.city, Lead.country == lead.country).first()
     if existing_lead:
         return {"message": "Lead already exists", "duplicate": True, "lead": lead_to_dict(existing_lead)}
 
     new_lead, website_data, scoring = await process_lead(lead, db)
     add_activity(db, new_lead, "LEAD_ANALYZED", "COMPLETED")
-
     return {
         "duplicate": False,
         "lead_id": new_lead.id,
-        "business": {
-            "name": new_lead.business_name,
-            "country": new_lead.country,
-            "city": new_lead.city,
-            "category": new_lead.category,
-        },
+        "business": {"name": new_lead.business_name, "country": new_lead.country, "city": new_lead.city, "category": new_lead.category},
         "website_analysis": website_data,
         "lead_analysis": scoring,
     }
@@ -252,13 +229,8 @@ async def enrich_lead_contact(lead_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(lead)
     add_activity(db, lead, "CONTACT_ENRICHMENT", "COMPLETED", lead.email, details=json.dumps(contact_data))
-
     return {"lead_id": lead.id, "business_name": lead.business_name, "contact_enrichment": contact_data, "saved_contact": {"email": lead.email, "phone": lead.phone}}
 
-
-# ============================================================
-# GMAIL WEB OAUTH
-# ============================================================
 
 @app.get("/api/gmail/status")
 def gmail_status():
@@ -314,9 +286,9 @@ async def create_lead_gmail_draft(lead_id: int, db: Session = Depends(get_db)):
 
     _, outreach = get_outreach(lead)
     try:
-        draft_result = create_gmail_draft(lead.email, outreach["subject"], outreach["body"])
-        add_activity(db, lead, "GMAIL_DRAFT", "DRAFT_CREATED", lead.email, outreach["subject"], json.dumps(draft_result))
-        return {"lead_id": lead.id, "business_name": lead.business_name, "email": lead.email, "gmail_draft": draft_result}
+        result = create_gmail_draft(lead.email, outreach["subject"], outreach["body"])
+        add_activity(db, lead, "GMAIL_DRAFT", "DRAFT_CREATED", lead.email, outreach["subject"], json.dumps(result))
+        return {"lead_id": lead.id, "business_name": lead.business_name, "email": lead.email, "gmail_draft": result}
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
 
@@ -342,18 +314,9 @@ async def send_lead_email(lead_id: int, payload: EmailInput | None = None, db: S
         raise HTTPException(status_code=500, detail=str(error))
 
 
-# ============================================================
-# DISCOVERY
-# ============================================================
-
 @app.post("/api/leads/discover")
 async def discover_business_leads(request: DiscoveryInput, db: Session = Depends(get_db)):
-    discovered_leads = await discover_leads(
-        city=request.city,
-        country=request.country,
-        category=request.category,
-        limit=request.limit,
-    )
+    discovered_leads = await discover_leads(city=request.city, country=request.country, category=request.category, limit=request.limit)
 
     if isinstance(discovered_leads, dict) and "error" in discovered_leads:
         return {"city": request.city, "country": request.country, "category": request.category, "total_discovered": 0, "saved": 0, "duplicates": 0, "failed": 0, "results": [], "error": discovered_leads["error"]}
@@ -364,12 +327,7 @@ async def discover_business_leads(request: DiscoveryInput, db: Session = Depends
         if not business_name:
             continue
 
-        existing_lead = db.query(Lead).filter(
-            Lead.business_name == business_name,
-            Lead.city == request.city,
-            Lead.country == request.country,
-        ).first()
-
+        existing_lead = db.query(Lead).filter(Lead.business_name == business_name, Lead.city == request.city, Lead.country == request.country).first()
         if existing_lead:
             results.append({"business_name": business_name, "status": "ALREADY_EXISTS", "lead_id": existing_lead.id})
             continue
@@ -385,13 +343,7 @@ async def discover_business_leads(request: DiscoveryInput, db: Session = Depends
         )
 
         try:
-            new_lead, _, _ = await process_lead(
-                lead_input,
-                db,
-                phone=discovered.get("phone"),
-                email=discovered.get("email"),
-                source=discovered.get("source"),
-            )
+            new_lead, _, _ = await process_lead(lead_input, db, phone=discovered.get("phone"), email=discovered.get("email"), source=discovered.get("source"))
             add_activity(db, new_lead, "LEAD_DISCOVERED", "SAVED", new_lead.email)
             results.append({
                 "business_name": new_lead.business_name,
@@ -413,17 +365,12 @@ async def discover_business_leads(request: DiscoveryInput, db: Session = Depends
     return {"city": request.city, "country": request.country, "category": request.category, "total_discovered": len(discovered_leads), "saved": saved, "duplicates": duplicates, "failed": failed, "results": results}
 
 
-# ============================================================
-# ACTIVITY LOGS + EXCEL EXPORT
-# ============================================================
-
 @app.get("/api/activity-logs")
 def get_activity_logs(lead_id: int | None = None, db: Session = Depends(get_db)):
     query = db.query(ActivityLog)
     if lead_id is not None:
         query = query.filter(ActivityLog.lead_id == lead_id)
     logs = query.order_by(ActivityLog.created_at.desc()).all()
-
     return [{
         "id": log.id,
         "lead_id": log.lead_id,
@@ -446,17 +393,7 @@ def export_activity_logs(db: Session = Depends(get_db)):
     sheet.append(["ID", "Lead ID", "Business Name", "Action", "Status", "Recipient", "Subject", "Details", "Created At"])
 
     for log in logs:
-        sheet.append([
-            log.id,
-            log.lead_id,
-            log.business_name,
-            log.action,
-            log.status,
-            log.recipient,
-            log.subject,
-            log.details,
-            log.created_at.isoformat(),
-        ])
+        sheet.append([log.id, log.lead_id, log.business_name, log.action, log.status, log.recipient, log.subject, log.details, log.created_at.isoformat()])
 
     for column in sheet.columns:
         max_length = max(len(str(cell.value or "")) for cell in column)
@@ -465,7 +402,6 @@ def export_activity_logs(db: Session = Depends(get_db)):
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
-
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
