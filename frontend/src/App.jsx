@@ -9,6 +9,7 @@ function App() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [gmail, setGmail] = useState({ connected: false, email: null });
 
   const [formData, setFormData] = useState({
     city: "Austin",
@@ -17,19 +18,39 @@ function App() {
     limit: 10,
   });
 
-  const loadLeads = async () => {
+  const loadLeads = async (
+    city = formData.city,
+    country = formData.country,
+    category = formData.category
+  ) => {
     try {
-      const response = await fetch(`${API_URL}/api/leads`);
+      const params = new URLSearchParams({ city, country, category });
+      const response = await fetch(`${API_URL}/api/leads?${params}`);
       const data = await response.json();
-      setLeads(data);
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Unable to load leads");
+      }
+
+      setLeads(Array.isArray(data) ? data : []);
     } catch (error) {
-      setMessage("Unable to connect to the backend.");
+      setMessage(`Error: ${error.message}`);
+    }
+  };
+
+  const checkGmail = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/gmail/status`);
+      const data = await response.json();
+      setGmail(data);
+    } catch (error) {
       console.error(error);
     }
   };
 
   useEffect(() => {
     loadLeads();
+    checkGmail();
   }, []);
 
   const handleChange = (event) => {
@@ -41,26 +62,20 @@ function App() {
 
   const discoverLeads = async (event) => {
     event.preventDefault();
-
     setLoading(true);
     setMessage("Searching for businesses...");
 
     try {
-      const response = await fetch(
-        `${API_URL}/api/leads/discover`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            city: formData.city,
-            country: formData.country,
-            category: formData.category,
-            limit: Number(formData.limit),
-          }),
-        }
-      );
+      const response = await fetch(`${API_URL}/api/leads/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          city: formData.city,
+          country: formData.country,
+          category: formData.category,
+          limit: Number(formData.limit),
+        }),
+      });
 
       const data = await response.json();
 
@@ -68,11 +83,19 @@ function App() {
         throw new Error(data.detail || "Lead discovery failed");
       }
 
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
       setMessage(
-        `Discovery complete: ${data.saved} saved, ${data.duplicates} duplicates.`
+        `Discovery complete: ${data.saved} saved, ${data.duplicates} duplicates, ${data.failed} failed.`
       );
 
-      await loadLeads();
+      await loadLeads(
+        formData.city,
+        formData.country,
+        formData.category
+      );
     } catch (error) {
       setMessage(`Error: ${error.message}`);
     } finally {
@@ -80,14 +103,14 @@ function App() {
     }
   };
 
+  const connectGmail = () => {
+    window.location.href = `${API_URL}/api/gmail/login`;
+  };
+
   const generateOutreach = async (leadId) => {
     try {
-      setMessage("Generating outreach email...");
-
-      const response = await fetch(
-        `${API_URL}/api/leads/${leadId}/outreach`
-      );
-
+      setMessage("Generating personalized outreach...");
+      const response = await fetch(`${API_URL}/api/leads/${leadId}/outreach`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -95,12 +118,8 @@ function App() {
       }
 
       const email = data.outreach_email;
-
-      alert(
-        `Subject:\n${email.subject}\n\nMessage:\n${email.body}`
-      );
-
-      setMessage("Outreach email generated.");
+      alert(`Subject:\n${email.subject}\n\nMessage:\n${email.body}`);
+      setMessage("Personalized outreach generated.");
     } catch (error) {
       setMessage(`Error: ${error.message}`);
     }
@@ -109,14 +128,10 @@ function App() {
   const enrichContact = async (leadId) => {
     try {
       setMessage("Searching for contact information...");
-
       const response = await fetch(
         `${API_URL}/api/leads/${leadId}/enrich-contact`,
-        {
-          method: "POST",
-        }
+        { method: "POST" }
       );
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -124,7 +139,6 @@ function App() {
       }
 
       setMessage("Contact enrichment completed.");
-
       await loadLeads();
     } catch (error) {
       setMessage(`Error: ${error.message}`);
@@ -134,14 +148,10 @@ function App() {
   const createGmailDraft = async (leadId) => {
     try {
       setMessage("Creating Gmail draft...");
-
       const response = await fetch(
         `${API_URL}/api/leads/${leadId}/gmail-draft`,
-        {
-          method: "POST",
-        }
+        { method: "POST" }
       );
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -154,35 +164,58 @@ function App() {
     }
   };
 
+  const sendEmail = async (leadId) => {
+    if (!window.confirm("Send this personalized email through Gmail?")) {
+      return;
+    }
+
+    try {
+      setMessage("Sending email through Gmail...");
+      const response = await fetch(
+        `${API_URL}/api/leads/${leadId}/send-email`,
+        { method: "POST" }
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Unable to send email");
+      }
+
+      setMessage("Email sent successfully and logged.");
+    } catch (error) {
+      setMessage(`Error: ${error.message}`);
+    }
+  };
+
+  const exportLogs = () => {
+    window.open(`${API_URL}/api/activity-logs/export`, "_blank");
+  };
+
   const totalLeads = leads.length;
-
   const highPriorityLeads = leads.filter(
-    (lead) =>
-      lead.priority === "HIGH" ||
-      lead.priority === "VERY_HIGH"
+    (lead) => lead.priority === "HIGH" || lead.priority === "VERY_HIGH"
   ).length;
-
-  const leadsWithEmail = leads.filter(
-    (lead) => lead.email
-  ).length;
+  const leadsWithEmail = leads.filter((lead) => lead.email).length;
 
   return (
     <div className="app">
       <header className="header">
         <div>
           <h1>Foreign Client Engine</h1>
-
           <p>
-            Discover businesses, analyze opportunities, and automate outreach.
+            Discover businesses, analyze opportunities, and manage personalized outreach.
           </p>
         </div>
 
-        <button
-          className="secondary-btn"
-          onClick={loadLeads}
-        >
-          Refresh Leads
-        </button>
+        <div className="header-actions">
+          <button className="secondary-btn" onClick={exportLogs}>
+            Export Excel
+          </button>
+
+          <button className="gmail-btn" onClick={connectGmail}>
+            {gmail.connected ? `Gmail: ${gmail.email}` : "Connect Gmail"}
+          </button>
+        </div>
       </header>
 
       <main>
@@ -193,46 +226,39 @@ function App() {
             <div className="form-grid">
               <div className="input-group">
                 <label>City</label>
-
                 <input
                   type="text"
                   name="city"
                   value={formData.city}
                   onChange={handleChange}
-                  placeholder="Austin"
                   required
                 />
               </div>
 
               <div className="input-group">
                 <label>Country</label>
-
                 <input
                   type="text"
                   name="country"
                   value={formData.country}
                   onChange={handleChange}
-                  placeholder="USA"
                   required
                 />
               </div>
 
               <div className="input-group">
                 <label>Business Category</label>
-
                 <input
                   type="text"
                   name="category"
                   value={formData.category}
                   onChange={handleChange}
-                  placeholder="Dentist"
                   required
                 />
               </div>
 
               <div className="input-group">
                 <label>Number of Leads</label>
-
                 <input
                   type="number"
                   name="limit"
@@ -245,35 +271,23 @@ function App() {
               </div>
             </div>
 
-            <button
-              type="submit"
-              className="primary-btn"
-              disabled={loading}
-            >
-              {loading
-                ? "Discovering..."
-                : "Discover Businesses"}
+            <button type="submit" className="primary-btn" disabled={loading}>
+              {loading ? "Discovering..." : "Discover Businesses"}
             </button>
           </form>
         </section>
 
-        {message && (
-          <div className="message-box">
-            {message}
-          </div>
-        )}
+        {message && <div className="message-box">{message}</div>}
 
         <section className="stats">
           <div className="stat-card">
             <span>Total Leads</span>
             <strong>{totalLeads}</strong>
           </div>
-
           <div className="stat-card">
             <span>High Priority</span>
             <strong>{highPriorityLeads}</strong>
           </div>
-
           <div className="stat-card">
             <span>Emails Found</span>
             <strong>{leadsWithEmail}</strong>
@@ -284,34 +298,24 @@ function App() {
           <div className="section-title">
             <div>
               <h2>Client Leads</h2>
-
               <span>
-                Manage discovered business opportunities.
+                {formData.city}, {formData.country} · {formData.category}
               </span>
             </div>
-
             <span>{leads.length} leads</span>
           </div>
 
           {leads.length === 0 ? (
             <div className="empty-state">
               <h3>No leads found yet</h3>
-
-              <p>
-                Use the discovery form above to find
-                potential foreign clients.
-              </p>
+              <p>Use the discovery form above to find potential foreign clients.</p>
             </div>
           ) : (
             <div className="leads-grid">
               {leads.map((lead) => (
-                <div
-                  className="lead-card"
-                  key={lead.id}
-                >
+                <div className="lead-card" key={lead.id}>
                   <div className="lead-top">
                     <h3>{lead.business_name}</h3>
-
                     <span
                       className={`priority ${lead.priority
                         ?.toLowerCase()
@@ -322,69 +326,44 @@ function App() {
                   </div>
 
                   <div className="lead-info">
-                    <p>
-                      <strong>Location:</strong>{" "}
-                      {lead.city}, {lead.country}
-                    </p>
-
-                    <p>
-                      <strong>Category:</strong>{" "}
-                      {lead.category}
-                    </p>
-
-                    <p>
-                      <strong>Website:</strong>{" "}
-                      {lead.website_status}
-                    </p>
-
-                    <p>
-                      <strong>Score:</strong>{" "}
-                      {lead.lead_score}
-                    </p>
-
-                    <p>
-                      <strong>Recommended:</strong>{" "}
-                      {lead.recommended_service}
-                    </p>
-
-                    <p>
-                      <strong>Email:</strong>{" "}
-                      {lead.email || "Not found"}
-                    </p>
-
-                    <p>
-                      <strong>Phone:</strong>{" "}
-                      {lead.phone || "Not found"}
-                    </p>
+                    <p><strong>Location:</strong> {lead.city}, {lead.country}</p>
+                    <p><strong>Category:</strong> {lead.category}</p>
+                    <p><strong>Website:</strong> {lead.website_status}</p>
+                    <p><strong>Score:</strong> {lead.lead_score}</p>
+                    <p><strong>Recommended:</strong> {lead.recommended_service}</p>
+                    <p><strong>Email:</strong> {lead.email || "Not found"}</p>
+                    <p><strong>Phone:</strong> {lead.phone || "Not found"}</p>
                   </div>
 
                   <div className="actions">
                     <button
                       className="action-btn"
-                      onClick={() =>
-                        generateOutreach(lead.id)
-                      }
+                      onClick={() => generateOutreach(lead.id)}
                     >
                       Generate Email
                     </button>
 
                     <button
                       className="secondary-btn"
-                      onClick={() =>
-                        enrichContact(lead.id)
-                      }
+                      onClick={() => enrichContact(lead.id)}
                     >
                       Find Contact
                     </button>
 
                     <button
                       className="gmail-btn"
-                      disabled={!lead.email}
-                      onClick={() =>
-                        createGmailDraft(lead.id)
-                      }
+                      disabled={!lead.email || !gmail.connected}
+                      onClick={() => createGmailDraft(lead.id)}
                     >
                       Gmail Draft
+                    </button>
+
+                    <button
+                      className="primary-btn"
+                      disabled={!lead.email || !gmail.connected}
+                      onClick={() => sendEmail(lead.id)}
+                    >
+                      Send Email
                     </button>
                   </div>
                 </div>
