@@ -4,7 +4,6 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from io import BytesIO
-from urllib.parse import quote
 import json
 
 from openpyxl import Workbook
@@ -31,7 +30,7 @@ from app.services.gmail_service import (
 app = FastAPI(
     title="Foreign Client Engine",
     description="Foreign client discovery, analysis and Gmail outreach system",
-    version="0.6.0"
+    version="0.6.1"
 )
 
 app.add_middleware(
@@ -67,8 +66,6 @@ class EmailInput(BaseModel):
     body: str | None = None
 
 
-# Simple single-user OAuth state for this personal MVP.
-# This is intentionally not a multi-user SaaS session system.
 oauth_state: str | None = None
 
 
@@ -181,7 +178,7 @@ def get_outreach(lead: Lead):
 def home():
     return {
         "message": "Foreign Client Engine is running",
-        "version": "0.6.0",
+        "version": "0.6.1",
         "status": "online",
     }
 
@@ -231,7 +228,6 @@ def get_leads(
     db: Session = Depends(get_db),
 ):
     query = db.query(Lead)
-
     if city:
         query = query.filter(Lead.city.ilike(city))
     if country:
@@ -260,10 +256,7 @@ def get_lead(lead_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/leads/{lead_id}/outreach")
-async def generate_lead_outreach(
-    lead_id: int,
-    db: Session = Depends(get_db),
-):
+async def generate_lead_outreach(lead_id: int, db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -287,10 +280,7 @@ async def generate_lead_outreach(
 
 
 @app.post("/api/leads/{lead_id}/enrich-contact")
-async def enrich_lead_contact(
-    lead_id: int,
-    db: Session = Depends(get_db),
-):
+async def enrich_lead_contact(lead_id: int, db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -344,7 +334,6 @@ def gmail_status():
 @app.get("/api/gmail/login")
 def gmail_login():
     global oauth_state
-
     try:
         authorization_url, state = get_authorization_url()
         oauth_state = state
@@ -354,17 +343,17 @@ def gmail_login():
 
 
 @app.get("/api/gmail/callback")
-def gmail_callback(
-    request: Request,
-):
+def gmail_callback(request: Request):
     global oauth_state
 
     error = request.query_params.get("error")
     if error:
-        return {
-            "connected": False,
-            "error": error,
-        }
+        frontend_url = os.getenv("FRONTEND_URL")
+        if frontend_url:
+            return RedirectResponse(
+                f"{frontend_url}?gmail=error&message={quote(error)}"
+            )
+        return {"connected": False, "error": error}
 
     state = request.query_params.get("state")
     code = request.query_params.get("code")
@@ -378,6 +367,13 @@ def gmail_callback(
     try:
         result = complete_authorization(code)
         oauth_state = None
+        frontend_url = os.getenv("FRONTEND_URL")
+
+        if frontend_url:
+            return RedirectResponse(
+                f"{frontend_url}?gmail=connected"
+            )
+
         return {
             "message": "Gmail connected successfully",
             **result,
@@ -387,10 +383,7 @@ def gmail_callback(
 
 
 @app.post("/api/leads/{lead_id}/gmail-draft")
-async def create_lead_gmail_draft(
-    lead_id: int,
-    db: Session = Depends(get_db),
-):
+async def create_lead_gmail_draft(lead_id: int, db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -496,19 +489,18 @@ async def discover_business_leads(
         limit=request.limit,
     )
 
-    if isinstance(discovered_leads, dict):
-        if "error" in discovered_leads:
-            return {
-                "city": request.city,
-                "country": request.country,
-                "category": request.category,
-                "total_discovered": 0,
-                "saved": 0,
-                "duplicates": 0,
-                "failed": 0,
-                "results": [],
-                "error": discovered_leads["error"],
-            }
+    if isinstance(discovered_leads, dict) and "error" in discovered_leads:
+        return {
+            "city": request.city,
+            "country": request.country,
+            "category": request.category,
+            "total_discovered": 0,
+            "saved": 0,
+            "duplicates": 0,
+            "failed": 0,
+            "results": [],
+            "error": discovered_leads["error"],
+        }
 
     results = []
 
@@ -630,7 +622,7 @@ def export_activity_logs(db: Session = Depends(get_db)):
     sheet = workbook.active
     sheet.title = "Activity Logs"
 
-    headers = [
+    sheet.append([
         "ID",
         "Lead ID",
         "Business Name",
@@ -640,8 +632,7 @@ def export_activity_logs(db: Session = Depends(get_db)):
         "Subject",
         "Details",
         "Created At",
-    ]
-    sheet.append(headers)
+    ])
 
     for log in logs:
         sheet.append([
