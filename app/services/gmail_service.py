@@ -1,10 +1,10 @@
 import os
+import json
 import base64
-
 from email.mime.text import MIMEText
 
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
@@ -13,102 +13,153 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose"
 ]
 
+TOKEN_PATH = "token.json"
 
-def get_gmail_service():
-    """
-    Authenticate with Gmail API and return
-    an authorized Gmail service.
-    """
 
-    creds = None
+def _client_config():
+    client_id = os.getenv("GMAIL_CLIENT_ID")
+    client_secret = os.getenv("GMAIL_CLIENT_SECRET")
 
-    token_path = "token.json"
-    credentials_path = "credentials.json"
-
-    # Load existing login token
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(
-            token_path,
-            SCOPES
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET are not configured."
         )
 
-    # Refresh expired token
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-
-    # First-time authentication
-    if not creds or not creds.valid:
-
-        if not os.path.exists(credentials_path):
-            raise FileNotFoundError(
-                "credentials.json not found. "
-                "Download Gmail API OAuth credentials "
-                "and place them in the project root."
-            )
-
-        flow = InstalledAppFlow.from_client_secrets_file(
-            credentials_path,
-            SCOPES
-        )
-
-        creds = flow.run_local_server(
-            port=0
-        )
-
-        # Save token for future use
-        with open(
-            token_path,
-            "w"
-        ) as token:
-            token.write(
-                creds.to_json()
-            )
-
-    return build(
-        "gmail",
-        "v1",
-        credentials=creds
-    )
-
-
-def create_gmail_draft(
-    recipient: str,
-    subject: str,
-    body: str
-):
-    """
-    Create a Gmail draft.
-    Does NOT send the email.
-    """
-
-    service = get_gmail_service()
-
-    message = MIMEText(
-        body,
-        "plain"
-    )
-
-    message["to"] = recipient
-    message["subject"] = subject
-
-    encoded_message = base64.urlsafe_b64encode(
-        message.as_bytes()
-    ).decode()
-
-    draft_body = {
-        "message": {
-            "raw": encoded_message
+    return {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [os.getenv("GMAIL_REDIRECT_URI", "")]
         }
     }
 
+
+def get_gmail_service():
+    """Return an authenticated Gmail API service using a web OAuth token."""
+    creds = None
+
+    if os.path.exists(TOKEN_PATH):
+        try:
+            creds = Credentials.from_authorized_user_file(
+                TOKEN_PATH,
+                SCOPES
+            )
+        except Exception:
+            creds = None
+
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(TOKEN_PATH, "w", encoding="utf-8") as token:
+            token.write(creds.to_json())
+
+    if not creds or not creds.valid:
+        raise RuntimeError(
+            "Gmail is not connected. Open /api/gmail/login first."
+        )
+
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def gmail_is_connected():
+    try:
+        service = get_gmail_service()
+        profile = service.users().getProfile(userId="me").execute()
+        return {
+            "connected": True,
+            "email": profile.get("emailAddress")
+        }
+    except Exception:
+        return {
+            "connected": False,
+            "email": None
+        }
+
+
+def get_authorization_url():
+    redirect_uri = os.getenv("GMAIL_REDIRECT_URI")
+    if not redirect_uri:
+        raise RuntimeError("GMAIL_REDIRECT_URI is not configured.")
+
+    flow = Flow.from_client_config(
+        _client_config(),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent"
+    )
+
+    return authorization_url, state
+
+
+def complete_authorization(code: str):
+    redirect_uri = os.getenv("GMAIL_REDIRECT_URI")
+    if not redirect_uri:
+        raise RuntimeError("GMAIL_REDIRECT_URI is not configured.")
+
+    flow = Flow.from_client_config(
+        _client_config(),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+
+    with open(TOKEN_PATH, "w", encoding="utf-8") as token:
+        token.write(creds.to_json())
+
+    return gmail_is_connected()
+
+
+def _encode_message(recipient: str, subject: str, body: str):
+    message = MIMEText(body, "plain", "utf-8")
+    message["to"] = recipient
+    message["subject"] = subject
+
+    return base64.urlsafe_b64encode(
+        message.as_bytes()
+    ).decode()
+
+
+def create_gmail_draft(recipient: str, subject: str, body: str):
+    service = get_gmail_service()
+
     draft = service.users().drafts().create(
         userId="me",
-        body=draft_body
+        body={
+            "message": {
+                "raw": _encode_message(recipient, subject, body)
+            }
+        }
     ).execute()
 
     return {
         "status": "DRAFT_CREATED",
         "draft_id": draft.get("id"),
+        "recipient": recipient,
+        "subject": subject
+    }
+
+
+def send_gmail_message(recipient: str, subject: str, body: str):
+    service = get_gmail_service()
+
+    sent = service.users().messages().send(
+        userId="me",
+        body={
+            "raw": _encode_message(recipient, subject, body)
+        }
+    ).execute()
+
+    return {
+        "status": "SENT",
+        "message_id": sent.get("id"),
         "recipient": recipient,
         "subject": subject
     }
