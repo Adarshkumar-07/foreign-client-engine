@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+import secrets
 from email.mime.text import MIMEText
 
 from google.oauth2.credentials import Credentials
@@ -14,6 +15,7 @@ SCOPES = [
 ]
 
 TOKEN_PATH = "token.json"
+OAUTH_STATE_PATH = "oauth_state.json"
 
 
 def _client_config():
@@ -88,11 +90,23 @@ def get_authorization_url():
         redirect_uri=redirect_uri
     )
 
+    # google-auth-oauthlib generates a PKCE verifier inside the Flow.
+    # The callback creates a new Flow, so persist the verifier between
+    # the authorization request and the token exchange.
     authorization_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent"
     )
+
+    with open(OAUTH_STATE_PATH, "w", encoding="utf-8") as oauth_state:
+        json.dump(
+            {
+                "state": state,
+                "code_verifier": flow.code_verifier
+            },
+            oauth_state
+        )
 
     return authorization_url, state
 
@@ -102,17 +116,35 @@ def complete_authorization(code: str):
     if not redirect_uri:
         raise RuntimeError("GMAIL_REDIRECT_URI is not configured.")
 
+    code_verifier = None
+    if os.path.exists(OAUTH_STATE_PATH):
+        try:
+            with open(OAUTH_STATE_PATH, "r", encoding="utf-8") as oauth_state:
+                saved_state = json.load(oauth_state)
+            code_verifier = saved_state.get("code_verifier")
+        except Exception:
+            code_verifier = None
+
     flow = Flow.from_client_config(
         _client_config(),
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
 
+    if code_verifier:
+        flow.code_verifier = code_verifier
+
     flow.fetch_token(code=code)
     creds = flow.credentials
 
     with open(TOKEN_PATH, "w", encoding="utf-8") as token:
         token.write(creds.to_json())
+
+    # The verifier is single-use. Remove it after a successful exchange.
+    try:
+        os.remove(OAUTH_STATE_PATH)
+    except FileNotFoundError:
+        pass
 
     return gmail_is_connected()
 
