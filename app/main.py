@@ -20,13 +20,13 @@ from app.services.opportunity_analyzer import analyze_opportunity
 from app.services.email_generator import generate_outreach_email
 from app.services.lead_discovery import discover_leads
 from app.services.contact_enricher import enrich_contact
-from app.services.gmail_service import create_gmail_draft, send_gmail_message, get_authorization_url, complete_authorization, gmail_is_connected
+from app.services.gmail_service import create_gmail_draft, send_gmail_message, get_authorization_url, complete_authorization, gmail_is_connected, disconnect_gmail
 
 
 app = FastAPI(
     title="Foreign Client Engine",
     description="Foreign client discovery, analysis and Gmail outreach system",
-    version="0.6.1"
+    version="0.6.2"
 )
 
 app.add_middleware(
@@ -151,7 +151,7 @@ def get_outreach(lead: Lead):
 
 @app.get("/")
 def home():
-    return {"message": "Foreign Client Engine is running", "version": "0.6.1", "status": "online"}
+    return {"message": "Foreign Client Engine is running", "version": "0.6.2", "status": "online"}
 
 
 @app.get("/api/health")
@@ -276,6 +276,17 @@ def gmail_callback(request: Request):
         raise HTTPException(status_code=500, detail=str(error))
 
 
+@app.post("/api/gmail/disconnect")
+def gmail_disconnect():
+    global oauth_state
+    try:
+        result = disconnect_gmail()
+        oauth_state = None
+        return result
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+
 @app.post("/api/leads/{lead_id}/gmail-draft")
 async def create_lead_gmail_draft(lead_id: int, db: Session = Depends(get_db)):
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
@@ -387,23 +398,33 @@ def get_activity_logs(lead_id: int | None = None, db: Session = Depends(get_db))
 @app.get("/api/activity-logs/export")
 def export_activity_logs(db: Session = Depends(get_db)):
     logs = db.query(ActivityLog).order_by(ActivityLog.created_at.desc()).all()
+
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Activity Logs"
-    sheet.append(["ID", "Lead ID", "Business Name", "Action", "Status", "Recipient", "Subject", "Details", "Created At"])
+
+    headers = ["ID", "Lead ID", "Business Name", "Action", "Status", "Recipient", "Subject", "Details", "Created At"]
+    sheet.append(headers)
 
     for log in logs:
-        sheet.append([log.id, log.lead_id, log.business_name, log.action, log.status, log.recipient, log.subject, log.details, log.created_at.isoformat()])
-
-    for column in sheet.columns:
-        max_length = max(len(str(cell.value or "")) for cell in column)
-        sheet.column_dimensions[column[0].column_letter].width = min(max_length + 2, 50)
+        sheet.append([
+            log.id,
+            log.lead_id,
+            log.business_name,
+            log.action,
+            log.status,
+            log.recipient,
+            log.subject,
+            log.details,
+            log.created_at.isoformat(),
+        ])
 
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
+
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="foreign_client_engine_logs.xlsx"'},
+        headers={"Content-Disposition": "attachment; filename=foreign-client-activity.xlsx"}
     )
