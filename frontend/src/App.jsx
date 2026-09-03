@@ -107,6 +107,29 @@ function App() {
     window.location.href = `${API_URL}/api/gmail/login`;
   };
 
+  const disconnectGmail = async () => {
+    if (!window.confirm("Disconnect Gmail from Foreign Client Engine?")) {
+      return;
+    }
+
+    try {
+      setMessage("Disconnecting Gmail...");
+      const response = await fetch(`${API_URL}/api/gmail/disconnect`, {
+        method: "POST",
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Unable to disconnect Gmail");
+      }
+
+      setGmail({ connected: false, email: null });
+      setMessage("Gmail disconnected successfully.");
+    } catch (error) {
+      setMessage(`Error: ${error.message}`);
+    }
+  };
+
   const generateOutreach = async (leadId) => {
     try {
       setMessage("Generating personalized outreach...");
@@ -212,9 +235,20 @@ function App() {
             Export Excel
           </button>
 
-          <button className="gmail-btn" onClick={connectGmail}>
-            {gmail.connected ? `Gmail: ${gmail.email}` : "Connect Gmail"}
-          </button>
+          {gmail.connected ? (
+            <>
+              <button className="gmail-btn" onClick={connectGmail}>
+                Gmail: {gmail.email}
+              </button>
+              <button className="secondary-btn" onClick={disconnectGmail}>
+                Disconnect Gmail
+              </button>
+            </>
+          ) : (
+            <button className="gmail-btn" onClick={connectGmail}>
+              Connect Gmail
+            </button>
+          )}
         </div>
       </header>
 
