@@ -1,8 +1,9 @@
 import os
 import json
 import base64
-import secrets
 from email.mime.text import MIMEText
+from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -77,6 +78,44 @@ def gmail_is_connected():
             "connected": False,
             "email": None
         }
+
+
+def disconnect_gmail():
+    """Revoke the stored Google OAuth token and remove local credentials."""
+    revoke_error = None
+
+    if os.path.exists(TOKEN_PATH):
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+            token = creds.refresh_token or creds.token
+
+            if token:
+                request = UrlRequest(
+                    "https://oauth2.googleapis.com/revoke",
+                    data=urlencode({"token": token}).encode("utf-8"),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    method="POST"
+                )
+                with urlopen(request, timeout=10) as response:
+                    if response.status not in (200, 400):
+                        raise RuntimeError(f"Google revoke returned HTTP {response.status}")
+        except Exception as error:
+            revoke_error = str(error)
+        finally:
+            try:
+                os.remove(TOKEN_PATH)
+            except FileNotFoundError:
+                pass
+
+    try:
+        os.remove(OAUTH_STATE_PATH)
+    except FileNotFoundError:
+        pass
+
+    if revoke_error:
+        raise RuntimeError(f"Gmail credentials removed, but Google token revocation failed: {revoke_error}")
+
+    return {"connected": False, "email": None}
 
 
 def get_authorization_url():
