@@ -1,2 +1,6 @@
 credentials.json
 token.json
+.env
+*.db
+__pycache__/
+*.py[cod]
