@@ -245,10 +245,17 @@ async def discover_leads(
                 ]
             }
 
-            filters = category_map.get(
-                category_lower,
-                ['["name"]']
-            )
+            filters = category_map.get(category_lower)
+
+            if not filters:
+                return {
+                    "error": (
+                        f"Unsupported business category: {category}. "
+                        "Supported categories: "
+                        + ", ".join(sorted(category_map.keys()))
+                    ),
+                    "leads": []
+                }
 
             radius = 10000
             query_parts = []
